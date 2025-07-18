@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>3D игра с физикой Cannon.js</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <!-- Подключаем Three.js и Cannon.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    
+    <script>
+        // Инициализация Three.js
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Загрузка фона
+        const textureLoader = new THREE.TextureLoader();
+        const bgTexture = textureLoader.load('https://raw.githubusercontent.com/Particlo/particlo.github.io/main/Spectro.jpg');
+        bgTexture.mapping = THREE.EquirectangularReflectionMapping;
+        
+        // Создание сферы для фона
+        const bgGeometry = new THREE.SphereGeometry(500, 60, 60);
+        const bgMaterial = new THREE.MeshBasicMaterial({ map: bgTexture, side: THREE.BackSide });
+        const background = new THREE.Mesh(bgGeometry, bgMaterial);
+        scene.add(background);
+
+        // Освещение
+        scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+        // Инициализация Cannon.js (физический мир)
+        const world = new CANNON.World();
+        world.gravity.set(0, -9.82, 0);
+        world.broadphase = new CANNON.NaiveBroadphase();
+        world.solver.iterations = 10;
+
+        // Материалы для физических тел
+        const physicsMaterial = new CANNON.Material("default");
+        const physicsContactMaterial = new CANNON.ContactMaterial(
+            physicsMaterial,
+            physicsMaterial,
+            {
+                restitution: 0.7,
+                friction: 0.3
+            }
+        );
+        world.addContactMaterial(physicsContactMaterial);
+
+        // Создание платформы (физика)
+        const groundShape = new CANNON.Plane();
+        const groundBody = new CANNON.Body({ mass: 0 });
+        groundBody.addShape(groundShape);
+        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1,0,0), -Math.PI/2);
+        world.addBody(groundBody);
+
+        // Визуальная платформа (Three.js)
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(30, 30),
+            new THREE.MeshStandardMaterial({ 
+                color: 0x333333, 
+                side: THREE.DoubleSide,
+                metalness: 0.0,
+                roughness: 1.0
+            })
+        );
+        plane.rotation.x = -Math.PI/2;
+        scene.add(plane);
+
+        // Коллекция для связи физических и графических объектов
+        const physicsToVisual = new Map();
+        const ballRadius = 0.5;
+
+        // Создание шарика (x, y, z, color)
+        function ball(x, y, z, color) {
+            // Физическое тело (Cannon.js)
+            const sphereShape = new CANNON.Sphere(ballRadius);
+            const sphereBody = new CANNON.Body({
+                mass: 1,
+                shape: sphereShape,
+                material: physicsMaterial,
+                position: new CANNON.Vec3(x, y, z)
+            });
+            world.addBody(sphereBody);
+
+            // Графический объект (Three.js)
+            const geometry = new THREE.SphereGeometry(ballRadius, 32, 32);
+            const material = new THREE.MeshStandardMaterial({
+                metalness: color ? 0.8 : 1.0,
+                roughness: 0.1,
+                envMap: bgTexture,
+                color: color ? new THREE.Color(color) : new THREE.Color(0xffffff)
+            });
+            
+            const sphereMesh = new THREE.Mesh(geometry, material);
+            sphereMesh.position.set(x, y, z);
+            scene.add(sphereMesh);
+
+            // Связываем физику и графику
+            physicsToVisual.set(sphereBody, sphereMesh);
+            
+            return { body: sphereBody, mesh: sphereMesh };
+        }
+
+        // Главный персонаж
+        const player = ball(0, 5, 0);
+        player.mesh.userData.isPlayer = true;
+
+        // Управление камерой
+        let yaw = 0;
+        let pitch = Math.PI/4;
+        const mouseSensitivity = 0.002;
+        const cameraDistance = 5;
+
+        document.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (document.pointerLockElement === document.body) {
+                yaw -= event.movementX * mouseSensitivity;
+                pitch += event.movementY * mouseSensitivity;
+                pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+            }
+        });
+
+        // Управление
+        const keys = {};
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        // Тестовые шары
+        ball(3, 5, 0, 0xff0000);
+        ball(3, 7, 0, 0x00ff00);
+        ball(0, 10, 3);
+
+        // Игровой цикл
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Движение персонажа (увеличил скорость в 3 раза)
+            const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+            const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+            
+            const moveDir = new CANNON.Vec3();
+            if (keys['KeyW']) moveDir.vadd(new CANNON.Vec3(forward.x, forward.y, forward.z), moveDir);
+            if (keys['KeyS']) moveDir.vsub(new CANNON.Vec3(forward.x, forward.y, forward.z), moveDir);
+            if (keys['KeyA']) moveDir.vadd(new CANNON.Vec3(right.x, right.y, right.z), moveDir);
+            if (keys['KeyD']) moveDir.vsub(new CANNON.Vec3(right.x, right.y, right.z), moveDir);
+            
+            if (moveDir.length() > 0) {
+                moveDir.normalize();
+                moveDir.scale(2.5, moveDir); // Увеличил скорость с 0.5 до 1.5
+                player.body.velocity.x = moveDir.x;
+                player.body.velocity.z = moveDir.z;
+            }
+
+            // Прыжок (немного увеличил силу прыжка)
+            if (keys['Space'] && player.body.position.y < ballRadius + 0.1) {
+                player.body.velocity.y = 7; // Увеличил с 5 до 7
+            }
+
+            // Обновляем физику (60 FPS)
+            world.step(1/60);
+
+            // Синхронизация графики с физикой
+            physicsToVisual.forEach((mesh, body) => {
+                mesh.position.copy(body.position);
+                mesh.quaternion.copy(body.quaternion);
+            });
+
+            // Камера
+            const cameraOffset = new THREE.Vector3(
+                -Math.sin(yaw) * Math.cos(pitch) * cameraDistance,
+                Math.sin(pitch) * cameraDistance + 2,
+                -Math.cos(yaw) * Math.cos(pitch) * cameraDistance
+            );
+            camera.position.copy(player.mesh.position).add(cameraOffset);
+            camera.lookAt(player.mesh.position);
+
+            renderer.render(scene, camera);
+        }
+
+        // Ресайз
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth/window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+        
+        // Экспортируем функцию ball
+        window.ball = (x, y, z, color) => {
+            const b = ball(x, y, z, color);
+            return b.mesh;
+        };
+    </script>
+</body>
+</html>
